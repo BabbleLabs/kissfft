@@ -4,6 +4,7 @@
 *.so.*
 *.a
 *.dylib
+.DS_Store
 test/testcpp
 test/bm_fftw_double
 test/bm_fftw_float
