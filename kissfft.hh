@@ -27,7 +27,7 @@ class kissfft
         {
             // fill twiddle factors
             _twiddles.resize(_nfft);
-            const scalar_t phinc =  (_inverse?2:-2)* std::acos( (scalar_t) -1)  / _nfft;
+            const scalar_t phinc = scalar_t((_inverse ? 2 : -2) * M_PI / _nfft);
             for (std::size_t i=0;i<_nfft;++i)
                 _twiddles[i] = std::exp( cpx_t(0,i*phinc) );
 
@@ -122,7 +122,7 @@ class kissfft
             }
         }
 
-        /// Calculates the Discrete Fourier Transform (DFT) of a real input
+        /// Calculates the Direct Fast Fourier Transform (DFFT) of a real input
         /// of size @c 2*N.
         ///
         /// The 0-th and N-th value of the DFT are real numbers. These are
@@ -151,8 +151,8 @@ class kissfft
         /// Since C++11, these requirements are guaranteed to be satisfied for
         /// @c scalar_ts being @c float, @c double or @c long @c double
         /// together with @c cpx_t being @c std::complex<scalar_t>.
-        void transform_real( const scalar_t * const src,
-                             cpx_t * const dst ) const
+        void transform( const scalar_t * const src,
+                        cpx_t * const dst ) const
         {
             const std::size_t N = _nfft;
             if ( N == 0 )
@@ -162,30 +162,88 @@ class kissfft
             transform( reinterpret_cast<const cpx_t*>(src), dst );
 
             // post processing for k = 0 and k = N
-            dst[0] = cpx_t( dst[0].real() + dst[0].imag(),
-                               dst[0].real() - dst[0].imag() );
+            dst[0] = cpx_t( dst[0].real() + dst[0].imag(),                                          // X[0] = (Re(Y[0]) + Im(Y[0])) + j * (Re(Y[0]) - Im(Y[0]))
+                            dst[0].real() - dst[0].imag() );
 
             // post processing for all the other k = 1, 2, ..., N-1
-            const scalar_t pi = std::acos( (scalar_t) -1);
-            const scalar_t half_phi_inc = ( _inverse ? pi : -pi ) / N;
-            const cpx_t twiddle_mul = std::exp( cpx_t(0, half_phi_inc) );
-            for ( std::size_t k = 1; 2*k < N; ++k )
+
+            const cpx_t twiddle_mul = std::exp( cpx_t(0, -M_PI / N) );
+
+            for ( std::size_t k = 1; 2*k < N; ++k )                                                 // k = 1, .., N/2-1
             {
-                const cpx_t w = (scalar_t)0.5 * cpx_t(
-                     dst[k].real() + dst[N-k].real(),
-                     dst[k].imag() - dst[N-k].imag() );
-                const cpx_t z = (scalar_t)0.5 * cpx_t(
-                     dst[k].imag() + dst[N-k].imag(),
-                    -dst[k].real() + dst[N-k].real() );
-                const cpx_t twiddle =
-                    k % 2 == 0 ?
-                    _twiddles[k/2] :
-                    _twiddles[k/2] * twiddle_mul;
-                dst[  k] =       w + twiddle * z;
-                dst[N-k] = std::conj( w - twiddle * z );
+                const cpx_t F = (scalar_t)0.5 * cpx_t(dst[k].real() + dst[N - k].real(),            // F[k] = 0.5 * (Y[k] + Y[N-k]')
+                                                      dst[k].imag() - dst[N - k].imag());
+
+                const cpx_t G = (scalar_t)0.5 * cpx_t( dst[k].imag() + dst[N - k].imag(),           // G[k] = -0.5j * (Y[k] - Y[N-k]')
+                                                      -dst[k].real() + dst[N - k].real());
+
+                const cpx_t W = k % 2 == 0 ? _twiddles[k/2] :  _twiddles[k/2] * twiddle_mul;        // W[k] = exp(-j * 2*pi / (2*N))
+
+                const cpx_t H = G * W;                                                              // H[k] = G[k] * W[k]
+
+                dst[k] = F + H;                                                                     // X[k]   = F[k] + H[k]
+                dst[N-k] = std::conj(F - H);                                                        // X[N-k] = (F[k] - H[k])'
             }
             if ( N % 2 == 0 )
-                dst[N/2] = std::conj( dst[N/2] );
+                dst[N/2] = std::conj( dst[N/2] );                                                   // X[N/2] = Y'[N/2], if N is even
+        }
+
+        /// Added just for back-compatibility
+        void transform_real( const scalar_t * const src,
+                             cpx_t * const dst ) const
+        {
+            transform (src, dst);
+        }
+
+        /// Calculates the Inverse Fast Fourier Transform (IFFT) given an
+        /// half complex spectrum as from the above DFFT of a real input,
+        /// and hence generating a real output of size @c 2*N.
+
+        void transform( cpx_t * const src,
+                        scalar_t * const dst ) const
+        {
+            const std::size_t N = _nfft;
+            if ( N == 0 )
+                return;
+
+            // pre processing for k = 0
+
+            const cpx_t x0 = src[0];
+
+            src[0] = cpx_t(x0.real() + x0.imag(),
+                           x0.real() - x0.imag());
+
+            // pre processing for all the other k = 1, 2, ..., N-1
+
+            const cpx_t twiddle_mul = std::exp( cpx_t(0, M_PI / N) );
+
+            for ( std::size_t k = 1; 2*k < N; ++k )
+            {
+                const cpx_t F = cpx_t(src[k].real() + src[N-k].real(),                              // F[k] = X[k] + X[N-k]'
+                                      src[k].imag() - src[N-k].imag() );
+
+                const cpx_t G = cpx_t(-src[k].imag() - src[N-k].imag(),                             // G[k] = j * (X[k] - X'[N-k])
+                                       src[k].real() - src[N-k].real() );
+
+                const cpx_t W = k % 2 == 0 ? _twiddles[k/2] : _twiddles[k/2] * twiddle_mul;         // W[k] = exp(j * 2*pi / (2*N))
+
+                const cpx_t H = G * W;                                                              // H[k] = G[k] * W[k]
+
+                src[k] = F + H;                                                                     // Z[k]   = F[k] + H[k]
+                src[N-k] = std::conj(F - H);                                                        // Z[N-k] = (F[k] - H[k])'
+            }
+
+            if (N % 2 == 0)
+                src[N / 2] = 2.0F * std::conj(src[N / 2]);
+
+            // perform complex FFT
+            transform(src, reinterpret_cast<cpx_t*>(dst));
+
+            // Output scaling
+            for ( std::size_t n = 0; n < 2*N; n++ )
+            {
+                dst[n] *= (1.0F/(2*N));
+            }
         }
 
     private:
