@@ -13,29 +13,25 @@
 #include <vector>
 
 
-template <typename scalar_t>
+template <typename scalar_t, int N, bool inverse = false>
 class kissfft
 {
     public:
-
         typedef std::complex<scalar_t> cpx_t;
 
-        kissfft( const std::size_t nfft,
-                 const bool inverse )
-            :_nfft(nfft)
-            ,_inverse(inverse)
+        kissfft() : _twiddles(N)
         {
             // fill twiddle factors
-            _twiddles.resize(_nfft);
-            const scalar_t phinc = scalar_t((_inverse ? 2 : -2) * M_PI / _nfft);
-            for (std::size_t i=0;i<_nfft;++i)
-                _twiddles[i] = std::exp( cpx_t(0,i*phinc) );
+            const scalar_t phinc = scalar_t((inverse ? 2 : -2) * M_PI / N);
+            for (std::size_t i = 0; i < N; ++i)
+                _twiddles[i] = std::exp(cpx_t(0, i * phinc));
 
             //factorize
             //start factoring out 4's, then 2's, then 3,5,7,9,...
-            std::size_t n= _nfft;
-            std::size_t p=4;
-            do {
+            std::size_t n = N;
+            std::size_t p = 4;
+            do
+            {
                 while (n % p) {
                     switch (p) {
                         case 4: p = 2; break;
@@ -48,31 +44,7 @@ class kissfft
                 n /= p;
                 _stageRadix.push_back(p);
                 _stageRemainder.push_back(n);
-            }while(n>1);
-        }
-
-
-        /// Changes the FFT-length and/or the transform direction.
-        ///
-        /// @post The @c kissfft object will be in the same state as if it
-        /// had been newly constructed with the passed arguments.
-        /// However, the implementation may be faster than constructing a
-        /// new fft object.
-        void assign( const std::size_t nfft,
-                     const bool inverse )
-        {
-            if ( nfft != _nfft )
-            {
-                kissfft tmp( nfft, inverse ); // O(n) time.
-                std::swap( tmp, *this ); // this is O(1) in C++11, O(n) otherwise.
-            }
-            else if ( inverse != _inverse )
-            {
-                // conjugate the twiddle factors.
-                for ( typename std::vector<cpx_t>::iterator it = _twiddles.begin();
-                      it != _twiddles.end(); ++it )
-                    it->imag( -it->imag() );
-            }
+            } while (n > 1);
         }
 
         /// Calculates the complex Discrete Fourier Transform.
@@ -154,10 +126,6 @@ class kissfft
         void transform( const scalar_t * const src,
                         cpx_t * const dst ) const
         {
-            const std::size_t N = _nfft;
-            if ( N == 0 )
-                return;
-
             // perform complex FFT
             transform( reinterpret_cast<const cpx_t*>(src), dst );
 
@@ -169,7 +137,7 @@ class kissfft
 
             const cpx_t twiddle_mul = std::exp( cpx_t(0, -M_PI / N) );
 
-            for ( std::size_t k = 1; 2*k < N; ++k )                                                 // k = 1, .., N/2-1
+            for (std::size_t k = 1; k < N/2; k++)                                                   // k = 1, .., N/2-1
             {
                 const cpx_t F = (scalar_t)0.5 * cpx_t(dst[k].real() + dst[N - k].real(),            // F[k] = 0.5 * (Y[k] + Y[N-k]')
                                                       dst[k].imag() - dst[N - k].imag());
@@ -184,6 +152,7 @@ class kissfft
                 dst[k] = F + H;                                                                     // X[k]   = F[k] + H[k]
                 dst[N-k] = std::conj(F - H);                                                        // X[N-k] = (F[k] - H[k])'
             }
+
             if ( N % 2 == 0 )
                 dst[N/2] = std::conj( dst[N/2] );                                                   // X[N/2] = Y'[N/2], if N is even
         }
@@ -202,10 +171,6 @@ class kissfft
         void transform( cpx_t * const src,
                         scalar_t * const dst ) const
         {
-            const std::size_t N = _nfft;
-            if ( N == 0 )
-                return;
-
             // pre processing for k = 0
 
             const cpx_t x0 = src[0];
@@ -291,7 +256,7 @@ class kissfft
         void kf_bfly4( cpx_t * const Fout, const std::size_t fstride, const std::size_t m) const
         {
             cpx_t scratch[7];
-            const scalar_t negative_if_inverse = _inverse ? -1 : +1;
+            const scalar_t negative_if_inverse = inverse ? -1 : +1;
             for (std::size_t k=0;k<m;++k) {
                 scratch[0] = Fout[k+  m] * _twiddles[k*fstride  ];
                 scratch[1] = Fout[k+2*m] * _twiddles[k*fstride*2];
@@ -302,7 +267,7 @@ class kissfft
                 scratch[3] = scratch[0] + scratch[2];
                 scratch[4] = scratch[0] - scratch[2];
                 scratch[4] = cpx_t( scratch[4].imag()*negative_if_inverse ,
-                                      -scratch[4].real()*negative_if_inverse );
+                                   -scratch[4].real()*negative_if_inverse );
 
                 Fout[k+2*m]  = Fout[k] - scratch[3];
                 Fout[k    ]+= scratch[3];
@@ -400,8 +365,8 @@ class kissfft
                     Fout[ k ] = _scratchbuf[0];
                     for ( std::size_t q=1;q<p;++q ) {
                         twidx += fstride * k;
-                        if (twidx>=_nfft)
-                          twidx-=_nfft;
+                        if (twidx>=N)
+                          twidx-=N;
                         Fout[ k ] += _scratchbuf[q] * twiddles[twidx];
                     }
                     k += m;
@@ -409,11 +374,10 @@ class kissfft
             }
         }
 
-        std::size_t _nfft;
-        bool _inverse;
         std::vector<cpx_t> _twiddles;
         std::vector<std::size_t> _stageRadix;
         std::vector<std::size_t> _stageRemainder;
         mutable std::vector<cpx_t> _scratchbuf;
 };
+
 #endif
